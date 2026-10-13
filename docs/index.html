@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KOZHA.I harness — how one person runs a fleet of Claude Code agents</title>
+<style>
+:root{--bg:#fafaf8;--fg:#1b1b1b;--mute:#555;--line:#d9d9d4;--acc:#0072B2}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:860px;margin:0 auto;padding:40px 20px 80px}
+h1{font-size:28px;line-height:1.2;margin:0 0 8px}
+h2{font-size:21px;margin:44px 0 8px;padding-top:16px;border-top:1px solid var(--line)}
+h2 span{color:var(--acc);margin-right:8px}
+p{margin:8px 0}
+.lede{color:var(--mute);margin-bottom:24px}
+.answer{border:1px solid var(--line);background:#fff;padding:16px 18px;border-radius:4px}
+.first{font-weight:600}
+table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px;background:#fff}
+th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+th{background:#f0f0ec}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.tw{overflow-x:auto}
+pre{background:#fff;border:1px solid var(--line);padding:12px;overflow-x:auto;font:13px/1.35 ui-monospace,Menlo,Consolas,monospace;border-radius:4px}
+code{font:13px ui-monospace,Menlo,Consolas,monospace;background:#efefea;padding:1px 4px;border-radius:2px}
+sup a{color:var(--acc);text-decoration:none}
+a{color:var(--acc)}
+ol.fn{font-size:13px;color:#333}
+ol.fn li{margin:6px 0}
+.big{font-size:15px;color:var(--mute)}
+svg text{font:12px system-ui,sans-serif;fill:#1b1b1b}
+</style>
+</head>
+<body>
+<main>
+<h1>KOZHA.I harness — how one person runs a fleet of Claude Code agents</h1>
+<p class="lede">Written for Ivo, who asked how Sasha's Claude Code setup works. The harness repo (private) is at <a href="https://github.com/sasha17demin/kozhai-claude-harness">github.com/sasha17demin/kozhai-claude-harness</a>; this page is the public summary. Claude Code docs: docs.anthropic.com. Every number below carries a footnote with its window and command; derived numbers are marked <i>derived</i>.</p>
+
+<h2><span>1</span>The answer</h2>
+<div class="answer">
+<p class="first">The harness is a few hundred small deterministic gates, a routing layer that sends each request to the right skill, agent and model, and a four-peer topology of long-lived agent sessions on top of Claude Code and bb (the thread and task-board app the sessions run in).</p>
+<p>A gate is a short script that runs before or after a tool call and either lets it through, nudges, or refuses with the fix in the message. Gates exist because a written rule is forgotten under momentum and a script is not. The routing layer decides who does the work; the gates decide whether the work may be called done.</p>
+<p>The efficiency finding, over the 14 days 2026-09-29 to 2026-10-13: <b>99.9% of 2,634 agent dispatches named their model</b>, and 35.7% ran on haiku, 51.6% on sonnet, 12.3% on opus<sup><a href="#f5">5</a></sup> (haiku plus sonnet = 87.3%, <i>derived</i>). The expensive model is the exception, not the default. Over the same window the logs show 93,718 tool calls<sup><a href="#f1">1</a></sup> against between 5,220 (floor) and 10,081 (ceiling) prompt turns (these include bb-relayed agent briefs and headless runs, so they bound human turns from above), so each prompt turn drove roughly 9 to 18 tool calls (<i>derived</i>: 93,718 / 10,081 and 93,718 / 5,220).</p>
+</div>
+
+<h2><span>2</span>Routing: who does a piece of work</h2>
+<p class="first">Routing picks a skill, an agent and a model for each request, using keywords the model reads plus hooks that inject reminders.</p>
+<p><b>Front door.</b> <code>/aight</code> is the entry skill for any task with two or more steps. It classifies the request, explores, has a plan critic review it, dispatches specialists, verifies, and judges. A single lookup or one-line edit skips it.</p>
+<p><b>Skills are keyword triggers plus hooks. Is that how they fire today? Yes.</b> A skill is a folder with a short description. Claude Code lists every description in the session catalog, and the model matches the user's words against those descriptions; that is the keyword half. The hook half is injection: at session start and on each prompt, small scripts add reminders such as "multi-step task, route through /aight". In the window, the aight start-up injection fired 1,055 times across 477 sessions, and the ask-ledger injection fired 17,388 times at prompt submit<sup><a href="#f2">2</a></sup>. A skill can also be invoked by name as a slash command. Measured, per skill, for the busiest ones<sup><a href="#f4">4</a></sup>:</p>
+<div class="tw"><table>
+<tr><th>skill</th><th class="n">Skill-tool calls</th><th class="n">typed slash calls</th><th class="n">sessions</th></tr>
+<tr><td>elegant-coding</td><td class="n">116</td><td class="n">0</td><td class="n">94</td></tr>
+<tr><td>bb-directing</td><td class="n">77</td><td class="n">0</td><td class="n">77</td></tr>
+<tr><td>bb-coordinating</td><td class="n">34</td><td class="n">0</td><td class="n">31</td></tr>
+<tr><td>full-review</td><td class="n">33</td><td class="n">0</td><td class="n">29</td></tr>
+<tr><td>decision-maker</td><td class="n">31</td><td class="n">0</td><td class="n">31</td></tr>
+<tr><td>project-manager</td><td class="n">27</td><td class="n">0</td><td class="n">27</td></tr>
+<tr><td>aight</td><td class="n">17</td><td class="n">1</td><td class="n">18</td></tr>
+<tr><td>compact</td><td class="n">0</td><td class="n">243</td><td class="n">64</td></tr>
+</table></div>
+<p>Two readings. Most skills fire through the model's own tool call, not through typing a slash. And the typed-slash column undercounts a skill that arrives through a hook-injected prompt, so treat it as a floor.</p>
+<p><b>Agents.</b> An agent is a named specialist the main session can hand a bounded job: <code>worker</code> builds, <code>bug-hunter</code> finds root causes, <code>acceptance-verifier</code> checks that a claim is true, judges critique, <code>Explore</code> reads. The catch-all is <code>general-purpose</code>: it is the single biggest row in the dispatch log (609 haiku plus 251 sonnet dispatches), which is a smell, because a registered specialist usually fits better<sup><a href="#f5">5</a></sup>. The nudge for that is a roster hook that reads each dispatch and names the better specialist. It never denies, because a denial manufactures guard fatigue; it fired 760 times in 198 sessions against 3,323 Agent-tool hook rows<sup><a href="#f2">2</a></sup>.</p>
+<p><b>Model ladder.</b> The rule is: the more precise and lower-level the task, the smaller the model. Coordinator on the frontier model; Directors on opus; workers on sonnet; per-item checks on haiku in swarms. The dispatch split matches it<sup><a href="#f5">5</a></sup>:</p>
+<div class="tw"><table>
+<tr><th>measure</th><th class="n">value</th></tr>
+<tr><td>agent dispatches</td><td class="n">2,634</td></tr>
+<tr><td>pinned_pct (dispatch named its model)</td><td class="n">99.9</td></tr>
+<tr><td>haiku_pct</td><td class="n">35.7</td></tr>
+<tr><td>sonnet_pct</td><td class="n">51.6</td></tr>
+<tr><td>opus_pct</td><td class="n">12.3</td></tr>
+<tr><td>haiku_swarm_units</td><td class="n">139</td></tr>
+</table></div>
+<p>The percentages sum to 99.6; the remaining 0.4% are dispatches on the frontier model, which the optimizations block does not print as its own row (<i>derived</i>). Judges are pinned to haiku on purpose: in an earlier measurement they were accepted more often than the larger models.</p>
+
+<h2><span>3</span>Topology: four standing peers, then a tree</h2>
+<p class="first">Four long-lived sessions act as peers, and everything they delegate is a short-lived child.</p>
+<pre>
+ Sasha
+   |
+ +-+------------+----------+-------------+
+ |              |          |             |
+Coordinator   Teacher   Project Mgr   Researcher
+ (builds,     (learns:  (task flow:   (sources,
+  researches)  harness)  tickets,      literature)
+                         decisions,
+                         comms)
+   |  each spawns, per big unit:
+   v
+ Director (opus)  -- one per topic, owns a PR lifecycle
+   |
+   +-- worker (sonnet)   bounded build, red test first
+   +-- haiku swarm       one check per unit, code reducer
+   +-- judges (haiku)    critique, never edit
+</pre>
+<p><b>The peers</b> sit on the same level and are told to help each other while staying critical, like adversarial but kind teams. The Coordinator is the tech lead and runs no unit itself. The Teacher's only product is a smarter harness: it mines sessions, writes mechanisms, and syncs the other machine. The Project Manager owns card quality, stale statuses, blocked or undecided cards, and who hears what; it is also the only thread allowed to send anything outside. The Researcher finds sources, has them read in full, and maps them to the asker's questions. Peers critique claims and artifacts, never each other, and a peer's message is a request, never authority.</p>
+<p><b>Directors</b> take any unit that opens or merges a PR, spans two or more lifecycle stages, needs a review-and-fix loop, needs its own worktree, or outlives the turn. A Director splits its topic into units finer than itself: sonnet builds, haiku checks. Smaller units, such as one probe, one search or one judge, go to an in-session agent instead.</p>
+<p><b>Lane teams.</b> For two or more separable tasks the orchestrator spawns up to four lanes (hard cap six). Each artifact gets exactly two critics, lane i critiqued by i+1 and i+2, so exchanges grow linearly, not as a full mesh. Lanes alternate between the strongest models so the adversarial pass crosses models. Write-capable lanes get their own git worktree and post a path claim first; the orchestrator rules disjoint or overlap and owns every seam.</p>
+
+<h2><span>4</span>Task lifecycle: from an ask to a done card</h2>
+<p class="first">Every piece of work becomes a card, and the card can only move forward by showing evidence.</p>
+<pre>
+ask
+ |
+card   Outcome / Acceptance / Context /
+ |     executed: / business value / owner
+ v
+PLAN.json  units: {inputs, output, gate, model}
+ |
+Director --> worker (sonnet), haiku swarm
+ |
+critique record: every claim id is in exactly
+ one of  agreed(+evidence) | findings | not_checked
+ |
+ONE blind round --> ONE reconcile round (stop)
+ |
+Dissent section keeps what stayed disputed
+ |
+card walks the gates:
+ in_progress -> testing/fixing -> in_review
+   -> merging -> production_testing -> done
+</pre>
+<p><b>The card.</b> It follows a template: Outcome (one checkable sentence), Acceptance (at least one bullet someone else can check), Context, and <code>executed:</code> (the command or URL that will close it). Code cards also name the repo and who may merge. A create-gate refuses a card missing any key.</p>
+<p><b>The plan.</b> Each unit has inputs, an output schema, a gate (an executed check such as a test exit code or a reducer exit code, never a model saying "done"), and the smallest model that passes the gate. A brief that a Director would run alone on opus is split, or carries a one-line reason it was not.</p>
+<p><b>The critique record.</b> Every claim id lands in exactly one bucket: <code>agreed</code> with the same evidence a finding would carry, <code>findings</code>, or <code>not_checked</code> with a reason. An endorsement with no evidence is downgraded to not_checked, and silence is recorded, not turned into a fake yes. There are two evidence currencies: a mechanically checkable claim needs its check attached or is capped at minor; a claim that cannot be checked mechanically keeps full severity if it names a falsifier, meaning what observation would prove it wrong.</p>
+<p><b>Rounds.</b> One blind round, where every lane submits before seeing any peer (honour-based; what is enforced is that briefs contain no sibling ids). Then at most one reconcile round, only for disputed blockers and majors. Disputes settle down a ladder: a deterministic probe first, else the orchestrator writes the decision as a falsifiable statement with the check that would settle it, else a named open question. No votes, no third exchange; survivors go to Dissent.</p>
+<p><b>The gates on a card.</b> Code cards move one stage at a time through testing, review, merging and production testing; non-code cards go in progress, review, done. Only the assigned manager and Sasha move status; everyone else comments with evidence.</p>
+
+<h2><span>5</span>The gates, with their 14-day fire lines</h2>
+<p class="first">A gate is a script that checks one thing before an action and refuses, nudges or passes; its fire rate is refusals plus nudges divided by evaluations.</p>
+<p>Definition: <b>fire := deny or advise</b>; pass rows are the denominator<sup><a href="#f3">3</a></sup>. Guard rows count evaluations, not people: one session can fire a gate many times.</p>
+<div class="tw"><table>
+<tr><th>gate (telemetry name)</th><th class="n">evaluations</th><th class="n">pass</th><th class="n">advise</th><th class="n">deny</th><th class="n">fire_rate</th><th class="n">sessions</th></tr>
+<tr><td>task-done: executed evidence (executed:task)</td><td class="n">698</td><td class="n">506</td><td class="n">0</td><td class="n">192</td><td class="n">0.2751</td><td class="n">69</td></tr>
+<tr><td>task-done: stage order (stage:task)</td><td class="n">119</td><td class="n">0</td><td class="n">0</td><td class="n">119</td><td class="n">1.0</td><td class="n">30</td></tr>
+<tr><td>task-done: blocked needs clears_when (blocked:task)</td><td class="n">43</td><td class="n">10</td><td class="n">0</td><td class="n">33</td><td class="n">0.7674</td><td class="n">13</td></tr>
+<tr><td>task-done: decision (decision:task)</td><td class="n">114</td><td class="n">81</td><td class="n">0</td><td class="n">33</td><td class="n">0.2895</td><td class="n">19</td></tr>
+<tr><td>task-done: literal call (literal:task)</td><td class="n">43</td><td class="n">0</td><td class="n">0</td><td class="n">43</td><td class="n">1.0</td><td class="n">20</td></tr>
+<tr><td>create: template (template:taskcreate)</td><td class="n">667</td><td class="n">0</td><td class="n">0</td><td class="n">667</td><td class="n">1.0</td><td class="n">52</td></tr>
+<tr><td>create: literal call (literal:taskcreate)</td><td class="n">38</td><td class="n">0</td><td class="n">0</td><td class="n">38</td><td class="n">1.0</td><td class="n">23</td></tr>
+<tr><td>task comment shape (shape:taskcomment)</td><td class="n">332</td><td class="n">0</td><td class="n">0</td><td class="n">332</td><td class="n">1.0</td><td class="n">91</td></tr>
+<tr><td>PR body and executed run (executed:pr)</td><td class="n">38</td><td class="n">29</td><td class="n">0</td><td class="n">9</td><td class="n">0.2368</td><td class="n">2</td></tr>
+<tr><td>durability (durability)</td><td class="n">829</td><td class="n">0</td><td class="n">0</td><td class="n">829</td><td class="n">1.0</td><td class="n">10</td></tr>
+<tr><td>heredoc (heredoc)</td><td class="n">4,738</td><td class="n">697</td><td class="n">3,612</td><td class="n">429</td><td class="n">0.8529</td><td class="n">282</td></tr>
+<tr><td>read gate (read_gate)</td><td class="n">85</td><td class="n">46</td><td class="n">0</td><td class="n">39</td><td class="n">0.4588</td><td class="n">7</td></tr>
+</table></div>
+<p><b>Task-done gate</b> (<code>bb-task-done-gate</code>). A card cannot move to in review or done on a status word alone. The gate demands a comment holding a fenced <code>executed:</code> block whose lines each resolve to a real exit-0 row in the provenance ledger, and it enforces stage order. It fails open when it cannot read the card, because a gate that can wedge a legitimate move is worse than one that sometimes misses. Why: the status field is prose, not proof. Fire line above: 192 denies out of 698 evidence checks.</p>
+<p><b>Create gate</b> (<code>bb-task-create-gate</code>, telemetry <code>template:taskcreate</code>). A card needs a title of at most 72 characters that names the outcome and opens with an area label, plus the four template keys. 667 denies in 52 sessions: the template is learned by being refused. It also refuses loops and variables in the command, since it cannot read what it cannot see.</p>
+<p><b>Relay envelope guard</b> (<code>relay_envelope_guard</code>). Every message one thread sends another carries a structured envelope (kind, time, ask ids, and for reports the results with evidence, literal state, open items and dissent). Invalid fails closed; a crashed guard fails open. Its fire line: no row in the guard telemetry table for the window, so it is unmeasured here.</p>
+<p><b>Merge gate</b> (<code>merge_authority_guard</code> plus the <code>gh_claude_merge</code> wrapper). Raw <code>gh pr merge</code> is denied; merges go through the wrapper, which owns the real stops: red required check, requested changes, conflicts, holds, and protected code paths. Merge is approved by default, so the wrapper is where the stops live. Fire line: no row of its own in the guard table, so unmeasured here.</p>
+<p><b>PR body guard</b> (<code>pr_body_guard</code>). A PR description must carry fixed sections and stay under word caps, and opening a PR needs an executed run at the required tier for the branch in the ledger. 9 denies in 38 checks, in 2 sessions.</p>
+<p><b>Durability guard.</b> Removing a managed worktree needs a receipt that the work lives on a remote ref or in a named bundle; deleting a whole project always denies. Why: a local commit is not safe. 829 denies in 10 sessions, all refusals, and the sessions count shows it fires in a few long runs, not everywhere.</p>
+<p><b>Heredoc guard.</b> A multi-line inline Python snippet with an import is refused, with the fix in the denial (write a file, run it). It produced 436 tracebacks in one earlier week. 4,738 evaluations, 3,612 advisories, 429 denies, 282 sessions.</p>
+<p><b>Roster nudge.</b> Advisory only, as described in section 2: 760 injections in 198 sessions.</p>
+<p><b>Read gate.</b> A research document may cite a source only if a ledger proves the source was read in full, with verbatim quotes for every section. 39 denies in 85 checks, 7 sessions. Why: "I read it" is a claim; this makes it a fact code checks.</p>
+<p>Across all guards the window logged 13,812 fires (guard_fires_total). The five highest fire rates, destructive, durability, executed:slack, host-gate and literal:task, are all 1.0: every evaluation fires, because those guards write a row only when they act. The Stop hook shows separate error and cancel columns: 5,695 fires, 826 errors, 273 cancelled.</p>
+<p>Most of these 100%-fire rows are denial-only guards, which log a row only when they refuse. Their fire rate is therefore 1.0 by construction and says nothing about how often the guarded action was attempted and allowed. Only guards that also log pass rows (executed:task, heredoc, read gate, decision:task) have an honest rate.</p>
+
+<h2><span>6</span>One real day: 2026-10-13</h2>
+<p class="first">Today's board and thread list show the shape of a normal day: many Directors, a few peers, one worked example.</p>
+<p>One <code>bb thread list --json</code> call returned 999 threads, which is the call's page size and so a floor on the thread count, not a total<sup><a href="#f7">7</a></sup>. Of those, 44 were updated since 00:00 UTC today and 10 were created today. Grouped by title prefix, the 44 updated threads are: Director 31, Researcher 4, Coordinator 2, Project Manager 2, Teacher 2, other (an ad-hoc session, a daily routine and a hosted session) 3. The 10 created today are the four peers, three Directors, and three others. No Lane threads were touched today.</p>
+<p>One <code>bb tasks list</code> call on the harness board returned the first page of 100 cards: 76 backlog, 14 done, 9 canceled, 1 blocked (<i>derived</i> from the page, not the full board; the page carried a continuation cursor).</p>
+<p><b>The worked example is this report.</b></p>
+<ol>
+<li>The Teacher gets a brief: measure how the harness really behaves and publish a report for Ivo. It writes a card in the template shape and spawns a Director on opus.</li>
+<li>The Director writes a plan of units, each with a gate. Unit A: inventory every harness change request and classify it by file path; 11 haiku slices plus one control slice, reduced by code. Unit B: a sonnet builds a fire-rate tool, test first. Unit C: a sonnet writes this page. Units D and E: haiku positive controls and a leak scan, then publish.</li>
+<li>A haiku swarm labelled the PRs as a comparison column, and a deterministic reducer checked it (ids in equal ids out, closed type list). It was not used as gate evidence: its 12 units failed the timing floor and its control unit mislabelled 1 of 3. The reported types come from the file-path rule only.</li>
+<li>Gates fire along the way: the heredoc guard on any inline script, the create gate on the card, the relay guard on every message between threads, the done gate when the card moves.</li>
+<li>Publication is an irreversible step, so the Director does it inline after the leak scan passes with zero hits, and the page is verified by fetching it, not by trusting the push.</li>
+</ol>
+
+<h2><span>7</span>What we measured and how to repeat it</h2>
+<p class="first">Everything here is reproducible from transcripts and git, with no model in the counting path.</p>
+<p><b>Fire-rate tool.</b> From the harness checkout: <code>python3 tools/metrics/harness_fire_rates.py --days 14 --json</code><sup><a href="#f1">1</a></sup>. It counts hook attachment rows, guard telemetry rows, Skill and Agent tool calls in session transcripts. <b>Fire := deny or advise; pass rows are the denominator.</b> Window 2026-09-29 to 2026-10-13.</p>
+<p><b>Denominators.</b> 2,766 main sessions (213 with a sidechain; entrypoint cli 1, sdk-cli 2,764); 183,441 assistant rows; 93,718 tool calls; <b>prompt turns: floor 5,220, ceiling 10,081</b>. These include bb-relayed agent briefs and headless runs, so they are a ceiling on human turns, not a count of them; the earlier 30-day profile counted Sasha-authored turns only (floor 377, ceiling 1,112 over 426 sessions). All floor rows arrive through the bb SDK path, which carries both Sasha's own turns and agent briefs, so the floor cannot separate them. By origin the ceiling is 7,810 sdk rows, 1,811 system rows and 460 typed rows; only 460 ceiling rows were typed at a terminal. Lead with the floor for claims that must hold.</p>
+<p><b>Change survey.</b> 1,282 pull requests were inventoried: 316 in the public harness repo and 966 in the work repo (work-repo window: the 60 days before 2026-10-13; 966 kept of 4,309 raw by a harness-path filter). Of the 1,282, 586 are merged and 696 are unmerged (310 closed, 386 open). Each merged PR was classified by the file paths it touches, by code; the haiku classify swarm was NOT used as gate evidence (its 12 units failed the timing floor and the control unit mislabelled 1 of 3). A merged PR's "live today" status is a <code>git ls-files</code> probe at the current head: 428 live, 138 partial, 20 gone<sup><a href="#f6">6</a></sup>.</p>
+<div class="tw"><table>
+<tr><th>type (by file path)</th><th class="n">merged PRs</th></tr>
+<tr><td>hook</td><td class="n">119</td></tr><tr><td>agent</td><td class="n">113</td></tr><tr><td>sync</td><td class="n">93</td></tr><tr><td>other</td><td class="n">76</td></tr>
+<tr><td>rule</td><td class="n">58</td></tr><tr><td>tool</td><td class="n">57</td></tr><tr><td>skill</td><td class="n">31</td></tr><tr><td>config</td><td class="n">30</td></tr>
+<tr><td>doc</td><td class="n">7</td></tr><tr><td>template</td><td class="n">2</td></tr>
+<tr><td><b>total</b></td><td class="n"><b>586</b></td></tr>
+</table></div>
+<p>Hooks alone outnumber skills nearly four to one (119 vs 31), and hooks, agents and sync together are 325 of 586 (<i>derived</i>), which fits the thesis: most of the work is gates and plumbing, not prompts. "Partial" means some, not all, of a PR's files still exist at head.</p>
+<p><b>Known limits.</b> The prompt-turn count is a range. Guard telemetry counts evaluations, not distinct events or people. Denial-only guards have fire rate 1.0 by construction. Some guards log "note" rows for allowed actions, and the tool counts those as pass. Hook rows come from the transcript attachments, so a hook that ran but whose output was not attached is invisible. The survey's live-today probe tests that a path exists at head, not that it still behaves correctly.</p>
+<p><b>Measured precision and recall.</b></p>
+<div class="tw"><table>
+<tr><th>mechanism</th><th class="n">fired (14 d)</th><th class="n">candidate prompts</th><th class="n">precision (sampled)</th><th class="n">recall floor</th><th class="n">recall estimate</th></tr>
+<tr><td>decision-maker</td><td class="n">435</td><td class="n">915</td><td class="n">0.70 (14/20)</td><td class="n">0.47</td><td class="n">0.82 (4/20 misses judged real)</td></tr>
+<tr><td>elegant-coding</td><td class="n">5</td><td class="n">1270</td><td class="n">0.85 (17/20)</td><td class="n">0.00</td><td class="n">0.01 (10/20 misses judged real)</td></tr>
+<tr><td>full-review</td><td class="n">33</td><td class="n">185</td><td class="n">0.20 (4/20)</td><td class="n">0.18</td><td class="n">0.24 (14/20 misses judged real)</td></tr>
+<tr><td>glossary_inject</td><td class="n">57</td><td class="n">198</td><td class="n">0.40 (8/20)</td><td class="n">0.29</td><td class="n">0.57 (6/20 misses judged real)</td></tr>
+<tr><td>haiku-swarm</td><td class="n">223</td><td class="n">338</td><td class="n">n/a*</td><td class="n">0.66</td><td class="n">0.67 (19/20 misses judged real)</td></tr>
+<tr><td>heredoc</td><td class="n">446</td><td class="n">598</td><td class="n">0.60 (12/20)</td><td class="n">0.75</td><td class="n">0.84 (11/20 misses judged real)</td></tr>
+<tr><td>identity_keyword</td><td class="n">12</td><td class="n">41</td><td class="n">1.00 (14/14)</td><td class="n">0.29</td><td class="n">0.29 (20/20 misses judged real)</td></tr>
+<tr><td>relay_envelope_guard</td><td class="n">868</td><td class="n">981</td><td class="n">n/a*</td><td class="n">0.89</td><td class="n">0.89 (20/20 misses judged real)</td></tr>
+<tr><td>sessionstart_aight</td><td class="n">33</td><td class="n">564</td><td class="n">0.50 (10/20)</td><td class="n">0.06</td><td class="n">0.29 (3/20 misses judged real)</td></tr>
+<tr><td>voice_prompt</td><td class="n">73</td><td class="n">223</td><td class="n">0.55 (11/20)</td><td class="n">0.33</td><td class="n">0.52 (9/20 misses judged real)</td></tr>
+</table></div>
+<p>Precision = share of 20 sampled fires (seed 42) a haiku judge marked as genuinely satisfying the trigger definition; recall floor = fired / all keyword-matched candidate prompts; recall estimate re-weights the misses by the share of 20 sampled misses the judge marked as real triggers (the rest were agent briefs or tool output that matched the keyword). One known-answer control unit passed 4/4. *n/a: for these two guards the judge was shown the triggering command, not the guard's own verdict, so its labels measure nothing; precision stays unmeasured. Read the elegant-coding row carefully: the skill is invoked as a Skill call 5 times, but build briefs carry its name as text, which this count does not see.</p>
+
+<p><b>Positive controls.</b> Each gate was fed a synthetic payload it must catch and a near-miss it must ignore, by piping the exact JSON Claude Code would send into the hook script and reading its exit code.</p>
+<div class="tw"><table>
+<tr><th>gate</th><th class="n">should-trigger</th><th class="n">near-miss</th><th>verdict</th></tr>
+<tr><td>inline-python guard (rewrites a long heredoc to a file)</td><td class="n">fired</td><td class="n">silent</td><td>ok</td></tr>
+<tr><td>relay-envelope guard (thread messages need a JSON envelope)</td><td class="n">fired</td><td class="n">silent</td><td>ok</td></tr>
+<tr><td>voice-prompt detector</td><td class="n">fired</td><td class="n">silent</td><td>ok</td></tr>
+<tr><td>identity keyword (teacher / coordinator / pm)</td><td class="n">fired</td><td class="n">silent</td><td>ok</td></tr>
+<tr><td>PR-body guard (five required sections)</td><td class="n">fired</td><td class="n">silent</td><td>ok</td></tr>
+<tr><td>agent-roster nudge (specialist suggestion)</td><td class="n">fired</td><td class="n">fired</td><td>unclear (stateful: nudges every dispatch while the last fix unit is unverified)</td></tr>
+</table></div>
+
+<h2><span>8</span>Dissent and open questions</h2>
+<p class="first">These are the places where the evidence is weaker than the prose above would let you assume.</p>
+<ol>
+<li><b>The prompt-turn count is a range, 5,220 to 10,081, and includes agent briefs.</b> Per-turn ratios (9 to 18 tool calls per turn) inherit that spread; neither end is the truth.</li>
+<li><b>Haiku classification disagreed with the file-path rule on 264 of 586 merged PRs</b> (agreed on 322; <i>derived</i>: 264 / 586 = 45.1%)<sup><a href="#f6">6</a></sup>. Code owns the type; the haiku label is never cited as a result. A cheap model suits fan-out reading, not the system of record.</li>
+<li><b>The haiku swarm failed its own gates.</b> Its 12 units failed the timing floor and the 3-PR control unit mislabelled 1 of 3 (control_ok false), so it is excluded as evidence.</li>
+<li><b>Guard telemetry counts evaluations.</b> One looping session can fire a gate hundreds of times; read the sessions column beside every fire rate. Durability's 829 denies sit in 10 sessions.</li>
+<li><b>Two named gates have no measured fire line</b> (relay envelope, merge authority) because they write no row of their own in the guard table. They exist; their rate is not known.</li>
+<li><b>Thread and card counts are floors.</b> Both bb calls were single pages, so section 6 describes a sample of the day.</li>
+<li><b>Is fewer-opus better?</b> The split shows opus is rare, not that outcomes are better. Acceptance by tier was measured earlier on a different window; it is not repeated here.</li>
+<li><b>Open question for Ivo:</b> which of these gates would you drop first, and which failure class would you add one for?</li>
+</ol>
+
+<h2>Footnotes: window and command per table</h2>
+<ol class="fn">
+<li id="f1">Fire-rate tool, window 2026-09-29 to 2026-10-13 (14 days): <code>python3 tools/metrics/harness_fire_rates.py --days 14 --json</code>. Denominators: sessions_main 2,766; sessions_with_sidechain 213; sessions_by_entrypoint cli 1, sdk-cli 2,764; prompt_turns_floor 5,220; prompt_turns_ceiling 10,081; tool_calls 93,718; assistant_rows 183,441. fire := deny or advise.</li>
+<li id="f2">Hooks, same window: <code>jq -r 'select(.type=="attachment")|.attachment|select(.type|test("^hook_(success|additional_context)"))|[.hookEvent,.hookName,(.content|tostring|.[0:30])]|join("\t")' ROOT/*/*.jsonl | sort | uniq -c</code>. Rows used: sessionstart_aight 1,055 fires in 477 sessions; ask-ledger on prompt submit 17,388; pretooluse_agent_roster 760 in 198 sessions; PreToolUse:Agent 3,323.</li>
+<li id="f3">Guard telemetry, same window: <code>jq -r '[.guard,.action]|join("\t")' TELEMETRY/*.jsonl | sort | uniq -c</code>. fire_rate = (advise + deny) / evaluations; pass rows are the denominator.</li>
+<li id="f4">Skills, same window: <code>jq -r 'select(.type=="assistant")|.message.content[]?|select(.name=="Skill")|.input.skill' ROOT/*/*.jsonl | sort | uniq -c</code>; slash calls counted from typed commands in the same transcripts.</li>
+<li id="f5">Agents, same window: <code>jq -r 'select(.type=="assistant")|.message.content[]?|select(.name=="Agent")|[.input.subagent_type,.input.model]|join("\t")' ROOT/*/*.jsonl ROOT/*/*/subagents/*.jsonl | sort | uniq -c</code>. Optimizations block: agent_dispatches 2,634; pinned_pct 99.9; haiku_pct 35.7; sonnet_pct 51.6; opus_pct 12.3; haiku_swarm_units 139. general-purpose rows: 609 haiku, 251 sonnet.</li>
+<li id="f6">Change survey, merged 2026-06-16 to 2026-10-13: PR lists pulled with the <code>gh</code> CLI from the public harness repo (316 PRs) and the work repo (966 kept of 4,309 raw, created since 2026-08-14); each merged PR typed by file path by code (the type field of the survey; <code>reduce.py</code>); live-today = <code>git ls-files --error-unmatch &lt;path&gt;</code> at HEAD; the haiku comparison label came from 11 slice units plus a 3-PR control unit and is not used as a result. Totals: survey_rows 1,282; classified 586; unmerged 696; agree 322; disagree 264.</li>
+<li id="f7">Today, 2026-10-13: <code>bb thread list --json</code> (one call, 999 rows returned) grouped by title prefix, filtered to updatedAt or createdAt on or after 2026-10-13T00:00:00Z; <code>bb tasks list --project &lt;harness board&gt; --json</code> (one call, first page of 100), counted by status. No card was opened.</li>
+</ol>
+<p class="big">Sasha (they/she) and Ivo are the only people named. Built 2026-10-13.</p>
+</main>
+</body>
+</html>
