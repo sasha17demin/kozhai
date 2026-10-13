@@ -11,6 +11,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-app
 main{max-width:860px;margin:0 auto;padding:40px 20px 80px}
 h1{font-size:28px;line-height:1.2;margin:0 0 8px}
 h2{font-size:21px;margin:44px 0 8px;padding-top:16px;border-top:1px solid var(--line)}
+.part{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--acc);margin:56px 0 -32px}
 h2 span{color:var(--acc);margin-right:8px}
 p{margin:8px 0}
 .lede{color:var(--mute);margin-bottom:24px}
@@ -37,12 +38,13 @@ svg text{font:12px system-ui,sans-serif;fill:#1b1b1b}
 <p class="lede">Written for Ivo, who asked how Sasha's Claude Code setup works. The harness repo (private) is at <a href="https://github.com/sasha17demin/kozhai-claude-harness">github.com/sasha17demin/kozhai-claude-harness</a>; this page is the public summary. Claude Code docs: docs.anthropic.com. Every number below carries a footnote with its window and command; derived numbers are marked <i>derived</i>.</p>
 
 <h2><span>1</span>The answer</h2>
+<p><b>Words this page uses as its own.</b> An <b>agent</b> is one Claude Code process given a brief and a tool set; a <b>skill</b> is a written playbook a session loads on demand; a <b>hook</b> is a script Claude Code runs before or after a tool call. A <b>Director</b> is an agent session that owns one topic end to end (plan, build, review, merge) and spawns smaller units under it. A <b>lane</b> is one separable stream of work with its own git worktree, so two lanes never edit the same files. A <b>swarm</b> is a batch of parallel haiku agents, each doing exactly one small check and writing one JSON file, which a plain script then reduces. A <b>sidechain</b> is a sub-agent transcript that hangs off a main session; its tool calls are counted separately from the session that spawned it. A <b>brief</b> is the written task an agent receives: goal, acceptance criteria, files, constraints, and what to return. A <b>plan critic</b> is a cheap agent that reads a plan before any work starts and returns what to cut or fix. A <b>judge</b> is an agent that reads a finished artifact and returns a pass or fail with quoted evidence, never editing it. A <b>code reducer</b> is a plain script that merges many agents' JSON files into one table and rejects any file that fails its parity check.</p>
 <div class="answer">
 <p class="first">The harness is a few hundred small deterministic gates, a routing layer that sends each request to the right skill, agent and model, and a four-peer topology of long-lived agent sessions on top of Claude Code and bb (the thread and task-board app the sessions run in).</p>
 <p>A gate is a short script that runs before or after a tool call and either lets it through, nudges, or refuses with the fix in the message. Gates exist because a written rule is forgotten under momentum and a script is not. The routing layer decides who does the work; the gates decide whether the work may be called done.</p>
-<p>The efficiency finding, over the 14 days 2026-09-29 to 2026-10-13: <b>99.9% of 2,634 agent dispatches named their model</b>, and 35.7% ran on haiku, 51.6% on sonnet, 12.3% on opus<sup><a href="#f5">5</a></sup> (haiku plus sonnet = 87.3%, <i>derived</i>). The expensive model is the exception, not the default. Over the same window the logs show 93,718 tool calls<sup><a href="#f1">1</a></sup> against between 5,220 (floor) and 10,081 (ceiling) prompt turns (these include bb-relayed agent briefs and headless runs, so they bound human turns from above), so each prompt turn drove roughly 9 to 18 tool calls (<i>derived</i>: 93,718 / 10,081 and 93,718 / 5,220).</p>
 </div>
 
+<p class="part">Part I · How the system is built</p>
 <h2><span>2</span>Routing: who does a piece of work</h2>
 <p class="first">Routing picks a skill, an agent and a model for each request, using keywords the model reads plus hooks that inject reminders.</p>
 <p><b>Front door.</b> <code>/aight</code> is the entry skill for any task with two or more steps. It classifies the request, explores, has a plan critic review it, dispatches specialists, verifies, and judges. A single lookup or one-line edit skips it.</p>
@@ -125,6 +127,7 @@ card walks the gates:
 <p><b>Rounds.</b> One blind round, where every lane submits before seeing any peer (honour-based; what is enforced is that briefs contain no sibling ids). Then at most one reconcile round, only for disputed blockers and majors. Disputes settle down a ladder: a deterministic probe first, else the orchestrator writes the decision as a falsifiable statement with the check that would settle it, else a named open question. No votes, no third exchange; survivors go to Dissent.</p>
 <p><b>The gates on a card.</b> Code cards move one stage at a time through testing, review, merging and production testing; non-code cards go in progress, review, done. Only the assigned manager and Sasha move status; everyone else comments with evidence.</p>
 
+<p class="part">Part II · How it is verified</p>
 <h2><span>5</span>The gates, with their 14-day fire lines</h2>
 <p class="first">A gate is a script that checks one thing before an action and refuses, nudges or passes; its fire rate is refusals plus nudges divided by evaluations.</p>
 <p>Definition: <b>fire := deny or advise</b>; pass rows are the denominator<sup><a href="#f3">3</a></sup>. Guard rows count evaluations, not people: one session can fire a gate many times.</p>
@@ -168,7 +171,9 @@ card walks the gates:
 <li>Publication is an irreversible step, so the Director does it inline after the leak scan passes with zero hits, and the page is verified by fetching it, not by trusting the push.</li>
 </ol>
 
+<p class="part">Part III · What we measured, and where it is weak</p>
 <h2><span>7</span>What we measured and how to repeat it</h2>
+<p class="first">The efficiency finding, over the 14 days 2026-09-29 to 2026-10-13: <b>99.9% of 2,634 agent dispatches named their model</b>, and 35.7% ran on haiku, 51.6% on sonnet, 12.3% on opus<sup><a href="#f5">5</a></sup> (haiku plus sonnet = 87.3%, <i>derived</i>). The expensive model is the exception, not the default. Over the same window the logs show 93,718 tool calls<sup><a href="#f1">1</a></sup> against between 5,220 (floor) and 10,081 (ceiling) prompt turns (these include bb-relayed agent briefs and headless runs, so they bound human turns from above), so each prompt turn drove roughly 9 to 18 tool calls (<i>derived</i>: 93,718 / 10,081 and 93,718 / 5,220).</p>
 <p class="first">Everything here is reproducible from transcripts and git, with no model in the counting path.</p>
 <p><b>Fire-rate tool.</b> From the harness checkout: <code>python3 tools/metrics/harness_fire_rates.py --days 14 --json</code><sup><a href="#f1">1</a></sup>. It counts hook attachment rows, guard telemetry rows, Skill and Agent tool calls in session transcripts. <b>Fire := deny or advise; pass rows are the denominator.</b> Window 2026-09-29 to 2026-10-13.</p>
 <p><b>Denominators.</b> 2,766 main sessions (213 with a sidechain; entrypoint cli 1, sdk-cli 2,764); 183,441 assistant rows; 93,718 tool calls; <b>prompt turns: floor 5,220, ceiling 10,081</b>. These include bb-relayed agent briefs and headless runs, so they are a ceiling on human turns, not a count of them; the earlier 30-day profile counted Sasha-authored turns only (floor 377, ceiling 1,112 over 426 sessions). All floor rows arrive through the bb SDK path, which carries both Sasha's own turns and agent briefs, so the floor cannot separate them. By origin the ceiling is 7,810 sdk rows, 1,811 system rows and 460 typed rows; only 460 ceiling rows were typed at a terminal. Lead with the floor for claims that must hold.</p>
@@ -215,6 +220,7 @@ card walks the gates:
 <li><b>The prompt-turn count is a range, 5,220 to 10,081, and includes agent briefs.</b> Per-turn ratios (9 to 18 tool calls per turn) inherit that spread; neither end is the truth.</li>
 <li><b>Haiku classification disagreed with the file-path rule on 264 of 586 merged PRs</b> (agreed on 322; <i>derived</i>: 264 / 586 = 45.1%)<sup><a href="#f6">6</a></sup>. Code owns the type; the haiku label is never cited as a result. A cheap model suits fan-out reading, not the system of record.</li>
 <li><b>The haiku swarm failed its own gates.</b> Its 12 units failed the timing floor and the 3-PR control unit mislabelled 1 of 3 (control_ok false), so it is excluded as evidence.</li>
+<li><b>Two precision cells are unmeasured, not zero.</b> For the haiku-swarm nudge and the relay-envelope guard the judge was shown the command that triggered the gate, not the gate's own verdict, so its labels (0 of 20 and 1 of 20 "true") measure nothing and the table says n/a. Settling it needs each sampled fire paired with the guard's stdout.</li>
 <li><b>Guard telemetry counts evaluations.</b> One looping session can fire a gate hundreds of times; read the sessions column beside every fire rate. Durability's 829 denies sit in 10 sessions.</li>
 <li><b>Two named gates have no measured fire line</b> (relay envelope, merge authority) because they write no row of their own in the guard table. They exist; their rate is not known.</li>
 <li><b>Thread and card counts are floors.</b> Both bb calls were single pages, so section 6 describes a sample of the day.</li>
